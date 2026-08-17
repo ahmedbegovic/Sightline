@@ -1,0 +1,17 @@
+# Secrets — never commit; see README setup + Sightline/Core/Secrets.swift.example
+CONFIG
+Sightline/Core/Secrets.swift
+
+# Build output
+build/
+build_dev/
+build_rel/
+DerivedData/
+
+# Xcode local state
+xcuserdata/
+*.xcuserstate
+*.bak
+
+# macOS
+.DS_Store
