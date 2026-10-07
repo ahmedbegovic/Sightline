@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- App Store privacy manifest. Mirrors the README Privacy section: location + queries go to Google Places/Street View, chat text + place context go to Gemini; nothing is stored durably or used for tracking. -->
+	<!-- App Store privacy manifest. Mirrors the README Privacy section: camera frames and AI chat stay on device (Apple Foundation Models + Vision); location and typed queries go to Apple MapKit; the name and position of a place the user opens go to Google Places; nothing is stored durably or used for tracking. -->
 	<key>NSPrivacyTracking</key>
 	<false/>
 	<key>NSPrivacyTrackingDomains</key>
@@ -10,7 +10,7 @@
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array>
 		<dict>
-			<!-- Precise location is sent to Google Places / Street View metadata / Gemini grounding to find and rank nearby places. -->
+			<!-- Precise location is sent to Apple MapKit to list places in the camera direction; Google receives only the position of a place the user opens. Declared conservatively. -->
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypePreciseLocation</string>
 			<key>NSPrivacyCollectedDataTypeLinked</key>
@@ -23,7 +23,7 @@
 			</array>
 		</dict>
 		<dict>
-			<!-- Assistant chat text and search queries are sent to Gemini / Places to answer the user's questions. -->
+			<!-- Typed search queries are sent to Apple MapKit. Assistant chat runs on device and is not sent anywhere. Declared conservatively. -->
 			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
 			<key>NSPrivacyCollectedDataTypeLinked</key>

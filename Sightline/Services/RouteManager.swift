@@ -42,9 +42,9 @@ final class RouteManager: ObservableObject {
         lastError = nil
 
         let request = MKDirections.Request()
-        request.source = MKMapItem(placemark: MKPlacemark(coordinate: origin))
-        // Route to the street-side anchor when Google published one — walking directions to a venue centroid can land inside the block.
-        request.destination = MKMapItem(placemark: MKPlacemark(coordinate: place.arCoordinate))
+        request.source = MKMapItem(location: CLLocation(latitude: origin.latitude, longitude: origin.longitude), address: nil)
+        request.destination = MKMapItem(location: CLLocation(latitude: place.coordinate.latitude,
+                                                             longitude: place.coordinate.longitude), address: nil)
         request.transportType = .walking
         request.requestsAlternateRoutes = false
 

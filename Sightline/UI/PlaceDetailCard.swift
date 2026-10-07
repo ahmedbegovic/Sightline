@@ -27,7 +27,12 @@ struct PlaceDetailCard: View {
     }
 
     /// Hard clamp on the scrollable region; the action row lives outside it so Navigate is always reachable.
-    private var contentCap: CGFloat { place.photoResource == nil ? 260 : 430 }
+    private var contentCap: CGFloat { place.photoResource == nil && place.snapshot == nil ? 260 : 430 }
+
+    // MapKit fields first (free, already here); Google fills gaps when its lookup lands.
+    private var phone: String? { place.phone ?? place.details?.phone }
+    private var url: URL? { place.url ?? place.details?.url }
+    private var address: String? { place.address ?? place.details?.address }
     private var scrollHeight: CGFloat {
         contentHeight > 0 ? min(contentHeight, contentCap) : contentCap
     }
@@ -101,18 +106,28 @@ struct PlaceDetailCard: View {
             Group {
                 if let resource = place.photoResource {
                     PlacePhotoHeader(resource: resource)
+                } else if let snapshot = place.snapshot {
+                    SnapshotHeader(image: snapshot)
                 }
                 header
+                if let summary = place.summary {
+                    Text(summary)
+                        .font(Theme.Typography.meta)
+                        .foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .modifier(StaggerIn(appeared: appeared, index: 0))
 
             Group {
-                ratingRow
-                // Second-stage fields (photo, hours, address, reviews, contact) are still in flight.
-                if place.details == nil {
-                    detailsPendingRow
+                if place.isLocated {
+                    ratingRow
+                    // Google fields (photo, hours, reviews) are still in flight.
+                    if place.details == nil {
+                        detailsPendingRow
+                    }
                 }
-                if let address = place.address {
+                if let address {
                     addressRow(address)
                 }
             }
@@ -122,9 +137,11 @@ struct PlaceDetailCard: View {
                 if !place.reviews.isEmpty {
                     reviewList
                 }
-                Text("Data from Google")
-                    .font(Theme.Typography.micro)
-                    .foregroundStyle(Theme.textQuaternary)
+                if place.reviewCount > 0 || place.photoResource != nil {
+                    Text("Ratings and photo from Google")
+                        .font(Theme.Typography.micro)
+                        .foregroundStyle(Theme.textQuaternary)
+                }
             }
             .modifier(StaggerIn(appeared: appeared, index: 2))
         }
@@ -169,6 +186,7 @@ struct PlaceDetailCard: View {
 
     private var subtitle: String {
         var parts = [place.category.displayName]
+        if place.sighting != nil { parts.append("Seen by scan") }
         if !place.priceLabel.isEmpty { parts.append(place.priceLabel) }
         if let distance { parts.append(Format.distance(distance)) }
         return parts.joined(separator: " · ")
@@ -268,24 +286,26 @@ struct PlaceDetailCard: View {
     // MARK: - Actions
 
     /// Deterministic overflow rule — with a phone and a website there is no room for the "Ask AI" label.
-    private var compact: Bool { place.phone != nil && place.url != nil }
+    private var compact: Bool { phone != nil && url != nil }
 
     private var actionRow: some View {
         HStack(spacing: 10) {
-            Button {
-                Haptics.tap()
-                onNavigate()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "location.fill")
-                    Text("Navigate")
+            if place.isLocated {
+                Button {
+                    Haptics.tap()
+                    onNavigate()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "location.fill")
+                        Text("Navigate")
+                    }
+                    .font(Theme.Typography.button)
+                    .foregroundStyle(.white)
+                    .frame(minWidth: compact ? 140 : 0, maxWidth: .infinity, minHeight: 46)
+                    .background(Theme.accentGradient, in: Capsule())
                 }
-                .font(Theme.Typography.button)
-                .foregroundStyle(.white)
-                .frame(minWidth: compact ? 140 : 0, maxWidth: .infinity, minHeight: 46)
-                .background(Theme.accentGradient, in: Capsule())
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
 
             Button {
                 Haptics.light()
@@ -305,12 +325,12 @@ struct PlaceDetailCard: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Ask AI")
 
-            if let phone = place.phone, let telURL = Self.telURL(for: phone) {
+            if let phone, let telURL = Self.telURL(for: phone) {
                 roundGlassButton(symbol: "phone.fill", label: "Call") {
                     UIApplication.shared.open(telURL)
                 }
             }
-            if let url = place.url {
+            if let url {
                 roundGlassButton(symbol: "safari.fill", label: "Open website") {
                     UIApplication.shared.open(url)
                 }
@@ -368,6 +388,25 @@ private struct CardHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+/// The frame the scan looked at — free, instant, and exactly what the user pointed at.
+private struct SnapshotHeader: View {
+    let image: CGImage
+
+    var body: some View {
+        Image(decorative: image, scale: 1)
+            .resizable()
+            .scaledToFill()
+            .frame(height: 120)
+            .frame(maxWidth: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous)
+                    .strokeBorder(Theme.hairline, lineWidth: 1)
+            )
+            .allowsHitTesting(false)
     }
 }
 

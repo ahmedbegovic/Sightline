@@ -103,58 +103,30 @@ final class StubURLProtocol: URLProtocol {
 
 enum PlacesFixtures {
 
-    /// One search-result entry; omitted parameters omit the field entirely, `extra` overrides/adds raw keys.
-    static func entry(id: String? = nil,
-                      name: String? = nil,
-                      latitude: Double? = nil,
-                      longitude: Double? = nil,
-                      primaryType: String? = nil,
-                      types: [String]? = nil,
-                      rating: Double? = nil,
-                      userRatingCount: Int? = nil,
-                      businessStatus: String? = nil,
-                      pureServiceAreaBusiness: Bool? = nil,
-                      extra: [String: Any] = [:]) -> [String: Any] {
-        var entry: [String: Any] = [:]
-        if let id { entry["id"] = id }
-        if let name { entry["displayName"] = ["text": name, "languageCode": "en"] }
-        if let latitude, let longitude {
-            entry["location"] = ["latitude": latitude, "longitude": longitude]
-        }
-        if let primaryType { entry["primaryType"] = primaryType }
-        if let types { entry["types"] = types }
-        if let rating { entry["rating"] = rating }
-        if let userRatingCount { entry["userRatingCount"] = userRatingCount }
-        if let businessStatus { entry["businessStatus"] = businessStatus }
-        if let pureServiceAreaBusiness { entry["pureServiceAreaBusiness"] = pureServiceAreaBusiness }
-        for (key, value) in extra { entry[key] = value }
-        return entry
-    }
-
-    static func searchEnvelope(_ entries: [[String: Any]]) -> Data {
-        try! JSONSerialization.data(withJSONObject: ["places": entries])
-    }
-
-    /// The details GET returns one bare place object, not an envelope.
+    /// The details lookup is a one-result Text Search, so the place sits inside a "places" envelope.
     static func detailsBody(id: String,
+                            latitude: Double = 43.6533,
+                            longitude: Double = -79.3831,
+                            rating: Double? = nil,
+                            userRatingCount: Int? = nil,
                             formattedAddress: String? = nil,
                             phone: String? = nil,
                             websiteUri: String? = nil,
                             priceLevel: String? = nil,
                             openNow: Bool? = nil,
-                            servesVegetarian: Bool? = nil,
                             photoName: String? = nil,
                             reviews: [[String: Any]] = []) -> Data {
-        var payload: [String: Any] = ["id": id]
+        var payload: [String: Any] = ["id": id, "location": ["latitude": latitude, "longitude": longitude]]
+        if let rating { payload["rating"] = rating }
+        if let userRatingCount { payload["userRatingCount"] = userRatingCount }
         if let formattedAddress { payload["formattedAddress"] = formattedAddress }
         if let phone { payload["nationalPhoneNumber"] = phone }
         if let websiteUri { payload["websiteUri"] = websiteUri }
         if let priceLevel { payload["priceLevel"] = priceLevel }
         if let openNow { payload["currentOpeningHours"] = ["openNow": openNow] }
-        if let servesVegetarian { payload["servesVegetarianFood"] = servesVegetarian }
         if let photoName { payload["photos"] = [["name": photoName]] }
         if !reviews.isEmpty { payload["reviews"] = reviews }
-        return try! JSONSerialization.data(withJSONObject: payload)
+        return try! JSONSerialization.data(withJSONObject: ["places": [payload]])
     }
 
     static func review(rating: Double? = nil, text: String? = nil, author: String? = nil) -> [String: Any] {
@@ -167,42 +139,5 @@ enum PlacesFixtures {
 
     static func errorBody(message: String) -> Data {
         try! JSONSerialization.data(withJSONObject: ["error": ["message": message, "status": "ERROR"]])
-    }
-}
-
-// MARK: - Street View metadata fixtures
-
-enum StreetViewFixtures {
-
-    /// nil status yields a body without a "status" key (the decode-to-nil path).
-    static func metadata(status: String?) -> Data {
-        var payload: [String: Any] = ["copyright": "(c) Google"]
-        if let status { payload["status"] = status }
-        return try! JSONSerialization.data(withJSONObject: payload)
-    }
-}
-
-// MARK: - Gemini SSE fixtures
-
-enum GeminiFixtures {
-
-    /// SSE stream body: one data: line per text chunk, grounding metadata on the flagged chunk, [DONE] terminator.
-    static func sse(texts: [String], groundedAt: Int? = nil) -> Data {
-        var lines: [String] = []
-        for (index, text) in texts.enumerated() {
-            var candidate: [String: Any] = ["content": ["parts": [["text": text]]]]
-            if index == groundedAt {
-                candidate["groundingMetadata"] = ["groundingChunks": [[String: Any]()]]
-            }
-            let chunk = try! JSONSerialization.data(withJSONObject: ["candidates": [candidate]])
-            lines.append("data: " + String(decoding: chunk, as: UTF8.self))
-        }
-        lines.append("data: [DONE]")
-        return Data((lines.joined(separator: "\n\n") + "\n").utf8)
-    }
-
-    /// Non-200 Gemini responses are one JSON body, not SSE.
-    static func errorBody(message: String) -> Data {
-        try! JSONSerialization.data(withJSONObject: ["error": ["message": message]])
     }
 }

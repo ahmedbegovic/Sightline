@@ -1,6 +1,7 @@
 import Foundation
 import CoreLocation
 import SwiftUI
+import CoreGraphics
 
 // MARK: - Device pose
 
@@ -86,37 +87,6 @@ enum PlaceCategory: CaseIterable {
         case .other: return Color(red: 0.58, green: 0.64, blue: 0.74)
         }
     }
-
-    /// True for categories where "menu / dietary" assistant answers make sense.
-    var servesFood: Bool {
-        switch self {
-        case .restaurant, .cafe, .bakery, .bar, .iceCream: return true
-        default: return false
-        }
-    }
-}
-
-/// Coarse grouping the assistant routes on: quick questions, model persona, and heuristic answers all switch on this.
-enum PlaceGuideKind {
-    case eatery, landmark, museum, theater, park, hotel, retail, transit, essential, generic
-}
-
-extension PlaceCategory {
-    /// No `default`: a new category must be given a guide kind rather than silently inheriting the generic voice.
-    var guideKind: PlaceGuideKind {
-        switch self {
-        case .restaurant, .cafe, .bakery, .bar, .iceCream: return .eatery
-        case .landmark: return .landmark
-        case .museum: return .museum
-        case .theater: return .theater
-        case .park: return .park
-        case .hotel: return .hotel
-        case .shop, .grocery: return .retail
-        case .transit: return .transit
-        case .atm, .bank, .pharmacy: return .essential
-        case .other: return .generic
-        }
-    }
 }
 
 // MARK: - Reviews & places
@@ -128,8 +98,10 @@ struct Review: Identifiable, Hashable {
     let text: String
 }
 
-/// Rich listing payload fetched per id on demand (detail card / assistant open) — never part of discovery responses.
+/// Google listing fields, looked up by name + coordinate only when a card or the guide opens — never per scan.
 struct PlaceDetails: Hashable {
+    var rating: Double = 0
+    var reviewCount: Int = 0
     var address: String?
     var phone: String?
     var url: URL?
@@ -137,48 +109,62 @@ struct PlaceDetails: Hashable {
     var reviews: [Review] = []
     /// Live open/closed status from Google; nil when unknown.
     var isOpenNow: Bool?
-    /// Google's servesVegetarianFood attribute; nil when unknown.
-    var servesVegetarian: Bool?
     /// Google photo resource name, fetched via `GooglePlacesService.photoData`.
     var photoResource: String?
+}
+
+/// Where the camera was pointing when the scan saw this thing. Height- and distance-independent, so the bubble stays on the object.
+struct Sighting: Hashable {
+    /// Degrees clockwise from true north.
+    let bearing: Double
+    /// Degrees above the horizon (negative = below, e.g. looking down from a tower).
+    let elevation: Double
+    /// Where the scan was taken; a bearing only holds near this point.
+    var origin: CLLocation? = nil
+
+    /// A step sideways swings a near bearing fast (10 m at 30 m is ~18°), so past this a located place goes back to its map position.
+    static let driftMeters: CLLocationDistance = 15
 }
 
 struct Place: Identifiable {
     let id: String
     var name: String
     var category: PlaceCategory
+    /// Real map position when `isLocated`; otherwise the user's position at scan time (never shown as a distance).
     var coordinate: CLLocationCoordinate2D
-    /// Street-side anchor (walk navigation point or entrance) when Google published one; nil = fall back to `coordinate`.
-    var anchorCoordinate: CLLocationCoordinate2D?
-    /// Set when this place was found by the long-range landmark scan.
-    var isFarLandmark: Bool = false
-    /// Street View has no outdoor pano near this place — probably not visible from the street, so it ranks last.
-    var streetVisibilityUnlikely: Bool = false
+    /// False when the scan recognised something MapKit could not place — no distance, route or map pin.
+    var isLocated = true
+    /// Set for scan results: the bubble is drawn where the camera saw it, not where the map says it is.
+    var sighting: Sighting?
+    /// One-line description from the scan model.
+    var summary: String?
+    /// The camera frame the scan used; shown on the card and handed to the guide.
+    var snapshot: CGImage?
+    var phone: String?
+    var url: URL?
+    var address: String?
 
-    // Discovery-time Google values; zero when unpublished. In the scan mask because bubbles and the ambient quality gate need them.
-    var rating: Double = 0
-    var reviewCount: Int = 0
-
-    /// Rich fields, attached when `GooglePlacesService.placeDetails` answers; nil = not loaded (or load failed — UI shows discovery data).
+    /// Google fields, attached on demand; nil = not loaded (or not found).
     var details: PlaceDetails?
 
-    // Flat pass-throughs so pre-existing UI reads stay unchanged; each is nil/empty until details load.
-    var address: String? { details?.address }
-    var phone: String? { details?.phone }
-    var url: URL? { details?.url }
+    var rating: Double { details?.rating ?? 0 }
+    var reviewCount: Int { details?.reviewCount ?? 0 }
     var priceLevel: Int { details?.priceLevel ?? 0 }
     var reviews: [Review] { details?.reviews ?? [] }
     var isOpenNow: Bool? { details?.isOpenNow }
-    var servesVegetarian: Bool? { details?.servesVegetarian }
     var photoResource: String? { details?.photoResource }
 
     var priceLabel: String { priceLevel <= 0 ? "" : String(repeating: "$", count: min(4, priceLevel)) }
 
-    /// Coordinate to aim the AR bubble and the walking route at — the street-side anchor when known.
-    var arCoordinate: CLLocationCoordinate2D { anchorCoordinate ?? coordinate }
+    /// The sighting to draw from `location`: kept for unlocated places, dropped for located ones once the user walks away from the scan spot.
+    func sighting(at location: CLLocation?) -> Sighting? {
+        guard let sighting else { return nil }
+        guard isLocated, let origin = sighting.origin, let location else { return sighting }
+        return location.distance(from: origin) <= Sighting.driftMeters ? sighting : nil
+    }
 
     func distance(from location: CLLocation?) -> CLLocationDistance? {
-        guard let location else { return nil }
+        guard isLocated, let location else { return nil }
         return location.distance(from: CLLocation(latitude: coordinate.latitude,
                                                   longitude: coordinate.longitude))
     }
@@ -192,12 +178,13 @@ extension Place: Hashable {
             && lhs.category == rhs.category
             && lhs.coordinate.latitude == rhs.coordinate.latitude
             && lhs.coordinate.longitude == rhs.coordinate.longitude
-            && lhs.anchorCoordinate?.latitude == rhs.anchorCoordinate?.latitude
-            && lhs.anchorCoordinate?.longitude == rhs.anchorCoordinate?.longitude
-            && lhs.streetVisibilityUnlikely == rhs.streetVisibilityUnlikely
-            && lhs.isFarLandmark == rhs.isFarLandmark
-            && lhs.rating == rhs.rating
-            && lhs.reviewCount == rhs.reviewCount
+            && lhs.isLocated == rhs.isLocated
+            && lhs.sighting == rhs.sighting
+            && lhs.summary == rhs.summary
+            && lhs.snapshot === rhs.snapshot
+            && lhs.phone == rhs.phone
+            && lhs.url == rhs.url
+            && lhs.address == rhs.address
             && lhs.details == rhs.details
     }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -220,20 +207,15 @@ enum ScanState: Equatable {
     case found
     /// The request succeeded and genuinely returned nothing. Never set for a failure.
     case empty
-    /// Results landed, but the AR path cannot place long-range claims yet — the user has to step outside.
-    case needsOutdoors
     case failed(ScanFailure)
 }
 
 /// Why a scan or search produced no usable result set. Copy and iconography live at the render site.
 enum ScanFailure: Equatable {
-    case noLocationFix
-    /// A fix exists but its metadata is too poor to trust — stale or inaccurate location, or an unusable compass.
-    case poorSensors
+    /// No camera frame to look at (permission denied, session interrupted).
+    case noCamera
     case offline
-    /// Google rejected the key or bundle restriction — retrying won't help until configuration changes.
-    case accessDenied
-    /// Places is rate-limiting or failing server-side; a retry in a moment is genuinely worth suggesting.
+    /// MapKit is throttling; a retry in a moment is genuinely worth suggesting.
     case serviceBusy
     case other
 }

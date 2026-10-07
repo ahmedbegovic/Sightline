@@ -84,17 +84,11 @@ struct HUDPill: View {
 struct HUDStatusPill: View {
     /// PoseFlags, not PoseManager: observing the manager would re-body this glass subtree on every 60 Hz pose tick.
     @ObservedObject var flags: PoseFlags
-    @ObservedObject var scene: SceneBackendCoordinator
 
-    private enum Status: Equatable { case preciseOff, localizing(String), heading }
+    private enum Status: Equatable { case preciseOff, heading }
 
     private var status: Status? {
         if !flags.isSimulated && flags.preciseLocationOff { return .preciseOff }
-        if scene.backend.isGeoAR && scene.phase != .localized {
-            return .localizing(scene.phase == .localizing
-                ? "Pinpointing your position — pan slowly across buildings"
-                : "Starting AR — point your phone at the street")
-        }
         if !flags.isSimulated && flags.headingDegraded { return .heading }
         return nil
     }
@@ -109,15 +103,11 @@ struct HUDStatusPill: View {
                     }
                 } label: {
                     HUDPill(tone: .warning,
-                            text: "Turn on Precise Location for accurate AR",
+                            text: "Turn on Precise Location for better recognition",
                             symbol: "location.slash")
                 }
                 .buttonStyle(.plain)
                 .transition(.opacity.combined(with: .move(edge: .top)))
-
-            case .localizing(let message):
-                HUDPill(tone: .info, text: message, symbol: "dot.viewfinder")
-                    .transition(.opacity.combined(with: .move(edge: .top)))
 
             case .heading:
                 HUDPill(tone: .warning,

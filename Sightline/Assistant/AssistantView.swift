@@ -46,7 +46,7 @@ struct AssistantView: View {
                     Image(systemName: "sparkles")
                         .font(.system(size: 10))
                         .foregroundStyle(Theme.accent)
-                    Text("AI guide")
+                    Text("AI guide · Apple Intelligence")
                         .font(Theme.Typography.meta)
                         .foregroundStyle(Theme.accent)
                 }
@@ -65,7 +65,6 @@ struct AssistantView: View {
                     LazyVStack(spacing: 10) {
                         ForEach(engine.messages) { message in
                             AssistantMessageBubble(message: message,
-                                                   badge: engine.badge(for: message),
                                                    containerWidth: geo.size.width)
                                 .id(message.id)
                         }
@@ -109,7 +108,7 @@ struct AssistantView: View {
     private var quickChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(engine.quickQuestions, id: \.self) { question in
+                ForEach(AssistantPrompt.quickQuestions, id: \.self) { question in
                     Button {
                         Haptics.light()
                         engine.send(question, freshLocation: currentLocation)
@@ -125,8 +124,8 @@ struct AssistantView: View {
                             )
                     }
                     .buttonStyle(.plain)
-                    .disabled(engine.isThinking)
-                    .opacity(engine.isThinking ? 0.4 : 1)
+                    .disabled(engine.isThinking || !engine.isAvailable)
+                    .opacity(engine.isThinking || !engine.isAvailable ? 0.4 : 1)
                 }
             }
             .padding(.horizontal, 14)
@@ -175,7 +174,7 @@ struct AssistantView: View {
     }
 
     private var isSendDisabled: Bool {
-        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || engine.isThinking
+        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || engine.isThinking || !engine.isAvailable
     }
 
     private var currentLocation: CLLocation? {
@@ -195,7 +194,6 @@ struct AssistantView: View {
 
 private struct AssistantMessageBubble: View {
     let message: ChatMessage
-    let badge: AssistantMessageBadge?
     let containerWidth: CGFloat
 
     private var isUser: Bool { message.role == .user }
@@ -223,16 +221,6 @@ private struct AssistantMessageBubble: View {
                                 )
                         }
                     }
-                if let badge {
-                    HStack(spacing: 4) {
-                        Image(systemName: badge.symbolName)
-                            .font(.system(size: 9))
-                        Text(badge.label)
-                            .font(Theme.Typography.micro)
-                    }
-                    .foregroundStyle(Theme.textTertiary)
-                    .padding(.leading, 6)
-                }
             }
             .frame(maxWidth: containerWidth * (isUser ? 0.78 : 0.85),
                    alignment: isUser ? .trailing : .leading)

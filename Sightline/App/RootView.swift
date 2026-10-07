@@ -5,10 +5,8 @@ import UIKit
 private extension ScanFailure {
     var symbolName: String {
         switch self {
-        case .noLocationFix: return "location.slash"
-        case .poorSensors: return "antenna.radiowaves.left.and.right.slash"
+        case .noCamera: return "camera.fill"
         case .offline: return "wifi.exclamationmark"
-        case .accessDenied: return "key.slash"
         case .serviceBusy: return "clock.arrow.circlepath"
         case .other: return "exclamationmark.triangle"
         }
@@ -16,11 +14,9 @@ private extension ScanFailure {
 
     var message: String {
         switch self {
-        case .noLocationFix: return "Waiting for a location fix…"
-        case .poorSensors: return "Weak GPS or compass signal — try again."
+        case .noCamera: return "The camera isn't running — scanning needs it."
         case .offline: return "Check your connection and try again."
-        case .accessDenied: return "Places access denied — check the API key setup."
-        case .serviceBusy: return "Google Places is busy — try again in a moment."
+        case .serviceBusy: return "Maps is busy — try again in a moment."
         case .other: return "Something went wrong — try again."
         }
     }
@@ -28,8 +24,8 @@ private extension ScanFailure {
     /// Nothing but the glyph distinguished a failure from a progress toast before this.
     var tone: HUDPillTone {
         switch self {
-        case .noLocationFix, .poorSensors, .offline, .serviceBusy: return .warning
-        case .accessDenied, .other: return .danger
+        case .noCamera, .offline, .serviceBusy: return .warning
+        case .other: return .danger
         }
     }
 }
@@ -41,16 +37,13 @@ struct RootView: View {
     @EnvironmentObject var app: AppState
     @State private var dragHintDismissed = false
     @Environment(\.scenePhase) private var scenePhase
-    #if DEBUG
-    @State private var showStreetscapeSpike = false
-    #endif
 
     init() {}
 
     var body: some View {
         ZStack {
             // 1–2. Camera (AR feed, AVCapture preview or simulator backdrop) + look-around drag.
-            RootCameraLayer(scene: app.scene, camera: app.scene.camera, pose: app.pose) {
+            RootCameraLayer(camera: app.camera, pose: app.pose) {
                 dismissDragHint()
             }
 
@@ -59,11 +52,13 @@ struct RootView: View {
             // 3. AR bubbles — hidden while navigating or while the map is expanded.
             RootBubbleLayer(router: app.router,
                             places: app.places,
-                            hiddenIDs: app.hiddenBubbleIDs,
                             pose: app.pose,
                             selected: $app.selectedPlace,
-                            isMapExpanded: app.isMapExpanded,
-                            scene: app.scene)
+                            isMapExpanded: app.isMapExpanded)
+
+            // 3b. Aim point: a scan names what sits under it.
+            AimReticle(scanUI: app.scanUI, router: app.router,
+                       covered: app.selectedPlace != nil || app.isMapExpanded)
 
             // 4. Navigation guidance — always mounted; the ribbon canvas ignores the safe area, the HUD must not.
             GuidanceOverlayView(router: app.router,
@@ -88,11 +83,6 @@ struct RootView: View {
             RootLocationDeniedOverlay(flags: app.pose.flags)
                 .zIndex(70)
 
-            #if DEBUG
-            // 9b. Debug-only entry to the ARCore Streetscape Geometry spike.
-            StreetscapeSpikeButton { showStreetscapeSpike = true }
-                .zIndex(80)
-            #endif
         }
         .background(Color.black.ignoresSafeArea())
         // 10. Assistant sheet.
@@ -112,20 +102,12 @@ struct RootView: View {
         // An ARSession left running in the background is a battery and thermal problem, so route both directions.
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
-            case .active: app.scene.resumeForForeground()
-            case .inactive, .background: app.scene.pauseForBackground()
+            case .active: app.resumeForForeground()
+            case .inactive, .background: app.pauseForBackground()
             @unknown default: break
             }
         }
         .statusBarHidden(false)
-        #if DEBUG
-        .fullScreenCover(isPresented: $showStreetscapeSpike) {
-            StreetscapeSpikeView { showStreetscapeSpike = false }
-                // The spike runs its own ARSession — ours must let go of the camera first.
-                .onAppear { app.scene.pauseForBackground() }
-                .onDisappear { app.scene.resumeForForeground() }
-        }
-        #endif
     }
 
     private func dismissDragHint() {
@@ -139,8 +121,7 @@ struct RootView: View {
 // MARK: - Camera layer
 
 private struct RootCameraLayer: View {
-    @ObservedObject var scene: SceneBackendCoordinator
-    @ObservedObject var camera: CameraManager
+    @ObservedObject var camera: ARCameraEngine
     let pose: PoseManager
     let onLookAround: () -> Void
 
@@ -148,32 +129,19 @@ private struct RootCameraLayer: View {
 
     var body: some View {
         Group {
-            #if canImport(ARCoreGeospatial) && !targetEnvironment(simulator)
-            if scene.usesARCamera {
-                ARCameraContainer(session: scene.geoAR.arSession)
-            } else {
-                fallbackFeed
-            }
+            #if targetEnvironment(simulator)
+            MockStreetBackdrop(poseManager: pose)
             #else
-            fallbackFeed
+            switch camera.failure {
+            case nil: ARCameraContainer(session: camera.session)
+            case .permissionDenied: CameraPermissionDeniedOverlay()
+            case .unavailable: CameraUnavailableOverlay()
+            }
             #endif
         }
         .ignoresSafeArea()
         .contentShape(Rectangle())
         .gesture(lookGesture, including: pose.isSimulated ? .all : .subviews)
-    }
-
-    @ViewBuilder
-    private var fallbackFeed: some View {
-        if camera.isAvailable {
-            CameraPreviewView(session: camera.session)
-        } else if pose.isSimulated {
-            MockStreetBackdrop(poseManager: pose)
-        } else if camera.permissionDenied {
-            CameraPermissionDeniedOverlay()
-        } else {
-            CameraUnavailableOverlay()
-        }
     }
 
     private var lookGesture: some Gesture {
@@ -191,9 +159,9 @@ private struct RootCameraLayer: View {
     }
 }
 
-// MARK: - Camera fallback (device only — MockStreetBackdrop is a simulator artifact)
+// MARK: - Camera failure (device only — MockStreetBackdrop is a simulator artifact)
 
-/// Real device, camera not running (interrupted, still starting up, etc.) but permission isn't the problem.
+/// Real device, ARKit could not run, but permission isn't the problem.
 private struct CameraUnavailableOverlay: View {
     var body: some View {
         ZStack {
@@ -250,28 +218,53 @@ private struct RootScrim: View {
 private struct RootBubbleLayer: View {
     @ObservedObject var router: RouteManager
     let places: [Place]
-    /// Occlusion + landmark-rule verdicts; the mini-map deliberately still shows everything.
-    let hiddenIDs: Set<String>
     let pose: PoseManager
     @Binding var selected: Place?
     let isMapExpanded: Bool
-    @ObservedObject var scene: SceneBackendCoordinator
-
-    /// The AR path claims sub-degree heading; nothing may be drawn until it has actually earned that.
-    private var suppressed: Bool { scene.suppressesBubbles }
 
     var body: some View {
         ZStack {
-            if router.route == nil && !isMapExpanded && !suppressed {
-                BubbleOverlayView(places: places, hiddenIDs: hiddenIDs,
-                                  poseManager: pose, selected: $selected)
+            if router.route == nil && !isMapExpanded {
+                BubbleOverlayView(places: places, poseManager: pose, selected: $selected)
                     .transition(.opacity)
             }
         }
         .ignoresSafeArea()
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: router.route == nil)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isMapExpanded)
-        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: suppressed)
+    }
+}
+
+// MARK: - Aim reticle
+
+/// Marks the centre of the frame — the thing under it is what a scan names first.
+private struct AimReticle: View {
+    @ObservedObject var scanUI: ScanUIModel
+    @ObservedObject var router: RouteManager
+    let covered: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let scanning = scanUI.state == .scanning
+        ZStack {
+            Circle()
+                .strokeBorder(Theme.textPrimary.opacity(0.75), lineWidth: 1.5)
+                .frame(width: 54, height: 54)
+                .scaleEffect(scanning && !reduceMotion ? 0.82 : 1)
+                .animation(scanning && !reduceMotion
+                           ? .easeInOut(duration: 0.6).repeatForever(autoreverses: true) : .default,
+                           value: scanning)
+            Circle()
+                .fill(Theme.textPrimary.opacity(0.9))
+                .frame(width: 4, height: 4)
+        }
+        .shadow(color: .black.opacity(0.35), radius: 3)
+        .opacity(covered || router.route != nil ? 0 : 1)
+        .animation(Theme.Motion.standard, value: covered)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea()
     }
 }
 
@@ -296,10 +289,8 @@ private struct RootTopHUD: View {
         case .scanning:
             return ToastSpec(symbol: nil, text: "Scanning…", tone: .info)
         case .empty:
-            return ToastSpec(symbol: "binoculars", text: "Unable to find anything.", tone: .neutral)
-        case .needsOutdoors:
-            return ToastSpec(symbol: "door.left.hand.open",
-                             text: "Step outside to place distant landmarks", tone: .info)
+            return ToastSpec(symbol: "binoculars",
+                             text: "Nothing recognised — put it in the circle and try again.", tone: .neutral)
         case .failed(let failure):
             return ToastSpec(symbol: failure.symbolName, text: failure.message, tone: failure.tone)
         case .idle, .found:
@@ -310,7 +301,7 @@ private struct RootTopHUD: View {
 
     var body: some View {
         VStack(spacing: Theme.Space.s + 2) {
-            HUDStatusPill(flags: app.pose.flags, scene: app.scene)
+            HUDStatusPill(flags: app.pose.flags)
 
             if !isNavigating {
                 RootSearchField(search: scanUI.search,
@@ -469,31 +460,6 @@ private struct RootDetailLayer: View {
         .animation(Theme.Motion.gentle, value: app.selectedPlace?.id)
     }
 }
-
-#if DEBUG
-
-// MARK: - Streetscape spike entry (DEBUG only)
-
-/// Small circular button in the bottom-right, clear of the scan button and the mini-map.
-private struct StreetscapeSpikeButton: View {
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "cube")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Theme.textPrimary)
-                .frame(width: 44, height: 44)
-                .glassCircle(elevation: .low)
-        }
-        .buttonStyle(.plain)
-        .padding(.trailing, 14)
-        .padding(.bottom, 26)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-    }
-}
-
-#endif
 
 // MARK: - Location denied
 

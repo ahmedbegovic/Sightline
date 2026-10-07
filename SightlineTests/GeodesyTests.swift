@@ -86,15 +86,23 @@ final class ARProjectorGeodesyTests: XCTestCase {
         XCTAssertEqual(ARProjector.distanceMeters(from: origin, to: origin), 0, accuracy: 1e-9)
     }
 
-    func testBubbleOpacityRamp() {
-        XCTAssertEqual(ARProjector.bubbleOpacity(forPitch: -90), 0)
-        XCTAssertEqual(ARProjector.bubbleOpacity(forPitch: ARProjector.bubbleFadeOutPitch), 0)
-        let mid = (ARProjector.bubbleFadeOutPitch + ARProjector.bubbleFadeInPitch) / 2
-        XCTAssertEqual(ARProjector.bubbleOpacity(forPitch: mid), 0.5, accuracy: 1e-9)
-        XCTAssertEqual(ARProjector.bubbleOpacity(forPitch: ARProjector.bubbleFadeInPitch), 1)
-        XCTAssertEqual(ARProjector.bubbleOpacity(forPitch: 45), 1)
-        // A NaN pitch (sensor glitch) must fail visible, not blank the HUD.
-        XCTAssertEqual(ARProjector.bubbleOpacity(forPitch: .nan), 1)
+    /// A sighting is drawn where the camera saw it, whatever the height: dead ahead at capture pitch is screen centre.
+    func testSightingPlacementFollowsHeadingAndPitch() {
+        let size = CGSize(width: 400, height: 800)
+        let sighting = Sighting(bearing: 90, elevation: -40)   // looking down from a tower
+        let ahead = ARProjector.bubblePlacement(for: sighting, distance: nil,
+                                                pose: DevicePose(headingDegrees: 90, pitchDegrees: -40),
+                                                screenSize: size)
+        XCTAssertEqual(ahead.point.x, 200, accuracy: 0.001)
+        XCTAssertEqual(ahead.point.y, 400, accuracy: 0.001)
+        XCTAssertNil(ahead.distance)
+        // Turning right moves it left; tilting up moves it down the screen.
+        let turned = ARProjector.bubblePlacement(for: sighting, distance: 3_000,
+                                                 pose: DevicePose(headingDegrees: 100, pitchDegrees: -35),
+                                                 screenSize: size)
+        XCTAssertLessThan(turned.point.x, 200)
+        XCTAssertGreaterThan(turned.point.y, 400)
+        XCTAssertEqual(turned.edgeAngle, -10, accuracy: 1e-9)
     }
 
     func testOnScreenHysteresis() {

@@ -13,7 +13,7 @@ extension View {
         }
     }
 
-    /// Source-compatible with every existing call site; StreetscapeSpikeView depends on this signature.
+    /// Source-compatible with every existing call site.
     func glassCard(cornerRadius: CGFloat = Theme.Radius.card,
                    elevation: Theme.Elevation = .medium) -> some View {
         glassSurface(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),

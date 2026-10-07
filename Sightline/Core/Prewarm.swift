@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import FoundationModels
 
 /// First-use costs that would otherwise land on the first Scan or Search press, moved to launch.
 /// Exists because the very first Scan press visibly stuttered in a 2026-08-16 field test; warming these paths removed the hitch.
@@ -16,18 +17,20 @@ enum Prewarm {
     }
 
     private static func warmServices() {
-        // These inits build URLSessionConfigurations, URLSessions and an NSCache. Off-main, off the press path.
+        // URLSession + NSCache setup, off-main, off the press path.
         Task.detached(priority: .utility) {
-            _ = PlacesService.shared
             _ = GooglePlacesService.shared
-            _ = StreetViewVisibilityService.shared
+        }
+        // Loads the on-device model's assets so the first scan doesn't pay for it.
+        if SystemLanguageModel.default.availability == .available {
+            LanguageModelSession(instructions: SceneIdentifier.instructions).prewarm()
         }
     }
 
     /// Symbol images are cached per exact (name, pointSize, weight); warming a size the app never draws
     /// warms nothing. Every entry below is a size and weight that some view actually renders.
     private static let chromeSymbols = [
-        "binoculars", "door.left.hand.open", "location.slash",
+        "binoculars", "location.slash",
         "wifi.exclamationmark", "exclamationmark.triangle", "exclamationmark.triangle.fill",
         "magnifyingglass", "xmark.circle.fill", "xmark", "hand.draw",
         "location.north.line", "dot.viewfinder", "sparkles", "star.fill", "star",

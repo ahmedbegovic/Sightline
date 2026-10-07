@@ -177,7 +177,7 @@ private struct ScanMark: View {
     }
 }
 
-/// Arc centered on the mark's origin dot, spanning ±32° around straight up (PlacesService.scanConeDegrees).
+/// Arc centered on the mark's origin dot, spanning ±32° around straight up.
 private struct ScanArc: Shape {
     let radius: CGFloat
 

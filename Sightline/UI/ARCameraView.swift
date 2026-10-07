@@ -1,14 +1,13 @@
 import SwiftUI
 import UIKit
 
-#if canImport(ARCoreGeospatial) && !targetEnvironment(simulator)
+#if !targetEnvironment(simulator)
 import ARKit
 import SceneKit
 
 // MARK: - AR camera feed
 
 /// Hosts the live ARSession's video feed. Renders no SceneKit content and attaches no gestures — bubble taps must win.
-/// Named apart from the spike's own private `ARSessionContainer`, which must keep compiling untouched.
 struct ARCameraContainer: UIViewRepresentable {
     let session: ARSession
 

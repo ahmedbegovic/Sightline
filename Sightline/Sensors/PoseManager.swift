@@ -17,7 +17,7 @@ final class PoseFlags: ObservableObject {
     @Published fileprivate(set) var locationDenied = false
     /// True while the compass fix is degraded or absent; drives the "compass calibrating" hint. Always false in the simulator and on the AR path.
     @Published fileprivate(set) var headingDegraded: Bool
-    /// True when Precise Location is off — Geospatial needs full accuracy. Always false in the simulator.
+    /// True when Precise Location is off — scan candidates need a precise fix. Always false in the simulator.
     @Published fileprivate(set) var preciseLocationOff = false
 
     var isSimulated: Bool {
@@ -49,15 +49,6 @@ final class PoseManager: NSObject, ObservableObject {
     var locationDenied: Bool { flags.locationDenied }
     var headingDegraded: Bool { flags.headingDegraded }
     var preciseLocationOff: Bool { flags.preciseLocationOff }
-
-    /// True only after a real compass sample measured degraded (accuracy > 25°) — warm-up and the post-AR-demotion window set headingDegraded with no measurement yet, and must not read as compass trouble.
-    var compassMeasuredUnreliable: Bool {
-        #if targetEnvironment(simulator)
-        return false
-        #else
-        return hasHeadingFix && flags.headingDegraded
-        #endif
-    }
 
     var isSimulated: Bool {
         #if targetEnvironment(simulator)

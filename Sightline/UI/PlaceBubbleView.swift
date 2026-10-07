@@ -19,7 +19,7 @@ struct PlaceBubbleView: View {
             chip
             notch
         }
-        .frame(maxWidth: place.isFarLandmark ? 190 : 168)
+        .frame(maxWidth: place.sighting != nil ? 190 : 168)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
     }
@@ -42,7 +42,7 @@ struct PlaceBubbleView: View {
         .padding(.vertical, 7)
         .bubbleGlass()
         .overlay {
-            if place.isFarLandmark {
+            if place.sighting != nil {
                 RoundedRectangle(cornerRadius: Theme.Radius.pill, style: .continuous)
                     .strokeBorder(Theme.landmark.opacity(0.45), lineWidth: 1)
                     .allowsHitTesting(false)
@@ -69,7 +69,7 @@ struct PlaceBubbleView: View {
     private var labels: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 3) {
-                if place.isFarLandmark {
+                if place.sighting != nil {
                     Image(systemName: "sparkles")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(Theme.landmark)
@@ -91,9 +91,9 @@ struct PlaceBubbleView: View {
                 if let distance {
                     Text("·")
                         .foregroundStyle(Theme.textTertiary)
-                    // Gold means "far landmark"; accent is reserved for "selected".
+                    // Gold means "seen by a scan"; accent is reserved for "selected".
                     Text(Format.bubbleDistance(distance))
-                        .foregroundStyle(place.isFarLandmark ? Theme.landmark : Theme.textSecondary)
+                        .foregroundStyle(place.sighting != nil ? Theme.landmark : Theme.textSecondary)
                 }
             }
             .font(Theme.Typography.micro)

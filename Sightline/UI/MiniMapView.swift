@@ -120,7 +120,7 @@ struct MiniMapView: View {
     private var collapsedMap: some View {
         Map(position: $collapsedCamera, interactionModes: []) {
             routeLine
-            ForEach(places) { place in
+            ForEach(places.filter(\.isLocated)) { place in
                 Annotation("", coordinate: place.coordinate) {
                     CollapsedPlaceDot(place: place, isSelected: place.id == selected?.id)
                 }
@@ -175,7 +175,7 @@ struct MiniMapView: View {
         // Pan/zoom only: the heading cone assumes north-up, so map rotation would point it the wrong way.
         Map(position: $expandedCamera, interactionModes: [.pan, .zoom]) {
             routeLine
-            ForEach(places) { place in
+            ForEach(places.filter(\.isLocated)) { place in
                 Annotation("", coordinate: place.coordinate, anchor: .bottom) {
                     ExpandedPlaceMarker(place: place,
                                         isSelected: place.id == selected?.id) {

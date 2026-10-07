@@ -5,8 +5,6 @@ import CoreLocation
 struct BubbleOverlayView: View {
 
     private let places: [Place]
-    /// Occluded or long-range-suppressed ids: no bubble and no edge arrow, because both make the same claim.
-    private let hiddenIDs: Set<String>
     @ObservedObject private var poseManager: PoseManager
     @Binding private var selected: Place?
 
@@ -18,9 +16,8 @@ struct BubbleOverlayView: View {
     @State private var memory = LayoutMemory()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(places: [Place], hiddenIDs: Set<String>, poseManager: PoseManager, selected: Binding<Place?>) {
+    init(places: [Place], poseManager: PoseManager, selected: Binding<Place?>) {
         self.places = places
-        self.hiddenIDs = hiddenIDs
         self.poseManager = poseManager
         self._selected = selected
     }
@@ -29,11 +26,7 @@ struct BubbleOverlayView: View {
         GeometryReader { geo in
             let size = geo.size
             let pose = poseManager.pose
-            // Pointing at the pavement is not a claim about what's in front of you — ramp the bubbles out.
-            let opacity = ARProjector.bubbleOpacity(forPitch: pose.pitchDegrees)
-            let layout = Self.computeLayout(places: places, hiddenIDs: hiddenIDs,
-                                            pose: pose, size: size,
-                                            includesBubbles: opacity > 0, memory: memory)
+            let layout = Self.computeLayout(places: places, pose: pose, size: size, memory: memory)
 
             ZStack {
                 ZStack {
@@ -52,7 +45,7 @@ struct BubbleOverlayView: View {
                             // Center 27 pt above the projected anchor so the notch tip (bottom edge, half-height 27) lands exactly on the spot it claims.
                             .position(x: item.placement.point.x,
                                       y: item.placement.point.y - item.lift - 27)
-                            .zIndex(-item.placement.distance)
+                            .zIndex(-(item.placement.distance ?? 0))
                             .transition(.asymmetric(
                                 insertion: reduceMotion
                                     ? AnyTransition.opacity.animation(.easeOut(duration: 0.2))
@@ -64,10 +57,7 @@ struct BubbleOverlayView: View {
                             .animation(.easeOut(duration: 0.18), value: item.lift)
                     }
                 }
-                .opacity(opacity)
-                .allowsHitTesting(opacity > 0.05)
 
-                // Edge indicators keep full opacity — they are directional hints, not "this is in front of you".
                 // The animation belongs to this container only; hoisting it onto the ZStack would capture the bubbles.
                 edgeIndicators(layout.edges, size: size)
                     .animation(Theme.Motion.standard, value: layout.edgesSignature)
@@ -78,12 +68,13 @@ struct BubbleOverlayView: View {
 
     // MARK: - Leader lines
 
-    /// Single Canvas behind all bubbles; gradient line from each nearby bubble to its ground anchor.
+    /// Single Canvas behind all bubbles; gradient line from each nearby search bubble to its ground anchor.
+    /// Scan sightings skip it: they already sit on the thing the camera saw, and the ground model assumes street level.
     private func leaderLines(for items: [OnScreenItem],
                              pose: DevicePose, size: CGSize) -> some View {
         Canvas { context, _ in
-            for item in items where item.placement.distance <= 300 {
-                guard let ground = ARProjector.groundPoint(for: item.place.arCoordinate,
+            for item in items where item.place.sighting == nil && (item.placement.distance ?? .infinity) <= 300 {
+                guard let ground = ARProjector.groundPoint(for: item.place.coordinate,
                                                            pose: pose,
                                                            screenSize: size)
                 else { continue }
@@ -156,10 +147,12 @@ struct BubbleOverlayView: View {
                 .frame(width: 44, height: 44)
                 .glassCircle(elevation: .low)
 
-                Text(Format.bubbleDistance(item.distance))
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(Theme.textSecondary)
-                    .monospacedDigit()
+                if let distance = item.distance {
+                    Text(Format.bubbleDistance(distance))
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(Theme.textSecondary)
+                        .monospacedDigit()
+                }
             }
             .opacity(breathing ? 1.0 : 0.85)
             .contentShape(Rectangle())
@@ -191,7 +184,7 @@ struct BubbleOverlayView: View {
 
     private struct EdgeItem: Identifiable {
         let place: Place
-        let distance: CLLocationDistance
+        let distance: CLLocationDistance?
         let isLeft: Bool
         let slot: Int
         var id: String { place.id }
@@ -208,13 +201,15 @@ struct BubbleOverlayView: View {
     private static let maxBubbles = 5
 
     /// 5 m buckets: sub-meter distance noise must not reshuffle the ranking, which drives both the maxBubbles cut and the declutter rows.
-    private static func rankBucket(_ distance: CLLocationDistance) -> Int { Int((distance / 5).rounded()) }
+    private static func rankBucket(_ distance: CLLocationDistance?) -> Int {
+        distance.map { Int(($0 / 5).rounded()) } ?? 0
+    }
 
-    /// Bubble ranking: places Street View says aren't street-visible sink below everything else, then nearest first.
+    /// Bubble ranking: what the scan saw first, then nearest first.
     private static func ranksBefore(_ a: (place: Place, placement: BubblePlacement),
                                     _ b: (place: Place, placement: BubblePlacement)) -> Bool {
-        if a.place.streetVisibilityUnlikely != b.place.streetVisibilityUnlikely {
-            return !a.place.streetVisibilityUnlikely
+        if (a.place.sighting != nil) != (b.place.sighting != nil) {
+            return a.place.sighting != nil
         }
         let (bucketA, bucketB) = (rankBucket(a.placement.distance), rankBucket(b.placement.distance))
         return bucketA != bucketB ? bucketA < bucketB : a.place.id < b.place.id
@@ -222,10 +217,8 @@ struct BubbleOverlayView: View {
 
     /// Projects every place and runs the greedy row declutter; deterministic and allocation-light (runs per frame).
     private static func computeLayout(places: [Place],
-                                      hiddenIDs: Set<String>,
                                       pose: DevicePose,
                                       size: CGSize,
-                                      includesBubbles: Bool,
                                       memory: LayoutMemory) -> OverlayLayout {
         var onScreen: [(place: Place, placement: BubblePlacement)] = []
         var offScreen: [(place: Place, placement: BubblePlacement)] = []
@@ -233,20 +226,20 @@ struct BubbleOverlayView: View {
         onScreen.reserveCapacity(places.count)
 
         for place in places {
-            // Occluded or long-range-suppressed: no bubble, no edge arrow.
-            if hiddenIDs.contains(place.id) { continue }
-            // Project the street-side anchor, not the venue centroid.
-            guard var placement = ARProjector.bubblePlacement(for: place.arCoordinate,
-                                                              pose: pose,
-                                                              screenSize: size)
-            else { continue }
+            // A scan sighting sits where the camera saw it; a search result where the map puts it.
+            let projected: BubblePlacement?
+            if let sighting = place.sighting(at: pose.location) {
+                projected = ARProjector.bubblePlacement(for: sighting,
+                                                        distance: place.distance(from: pose.location),
+                                                        pose: pose, screenSize: size)
+            } else {
+                projected = ARProjector.bubblePlacement(for: place.coordinate, pose: pose, screenSize: size)
+            }
+            guard var placement = projected else { continue }
             let onScreenNow = ARProjector.isOnScreen(edgeAngle: placement.edgeAngle,
                                                      wasOnScreen: memory.onScreenIDs.contains(place.id))
-            // Recorded before the fade-out skip below, or a tilt at the pavement empties the memory.
-            if onScreenNow { nextOnScreen.insert(place.id) }
             if onScreenNow {
-                // Fully faded out: the declutter pass below would be wasted work.
-                guard includesBubbles else { continue }
+                nextOnScreen.insert(place.id)
                 // Nudge only by the bubble's own half-width so a calibrated FOV keeps its real horizontal spread.
                 let margin = 78 * placement.scale
                 placement.point.x = min(max(placement.point.x, margin), size.width - margin)

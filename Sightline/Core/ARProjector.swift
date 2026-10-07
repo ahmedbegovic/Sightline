@@ -10,8 +10,8 @@ struct BubblePlacement {
     var point: CGPoint
     /// Bubble size multiplier — larger for near places, smaller for far ones.
     var scale: CGFloat
-    /// Great-circle distance from the user to the target, in meters.
-    var distance: CLLocationDistance
+    /// Great-circle distance from the user to the target, in meters; nil for a sighting that could not be placed on the map.
+    var distance: CLLocationDistance?
     /// Signed degrees from screen center to the target; negative = target is to the left.
     var edgeAngle: Double
 }
@@ -31,20 +31,6 @@ enum ARProjector {
         guard h.isFinite, v.isFinite, (20...120).contains(h), (20...120).contains(v) else { return }
         horizontalFOV = h
         verticalFOV = v
-    }
-
-    // MARK: - Pitch gate
-
-    /// Below this pitch the user is looking at the pavement — bubbles fade out.
-    static let bubbleFadeOutPitch: Double = -30
-    /// Fully restored by here; the ramp between the two avoids a hard pop and needs no hysteresis.
-    static let bubbleFadeInPitch: Double = -24
-
-    /// Bubble opacity for the current tilt: 0 at or below the fade-out pitch, 1 at or above the fade-in pitch.
-    static func bubbleOpacity(forPitch pitch: Double) -> Double {
-        guard pitch.isFinite else { return 1 }
-        let t = (pitch - bubbleFadeOutPitch) / (bubbleFadeInPitch - bubbleFadeOutPitch)
-        return min(1, max(0, t))
     }
 
     /// Initial great-circle bearing, degrees clockwise from true north in `0..<360`.
@@ -101,9 +87,7 @@ enum ARProjector {
                                          to: bearing(from: user, to: coordinate))
         let x = screenX(forDelta: delta, screenSize: screenSize)
 
-        // Depth-true size: 1.2 (<= 25 m) eases down to 0.6 (>= 2500 m) on a sqrt curve, strictly monotonic in distance.
-        let t = clamp((distance - 25) / (2500 - 25), 0, 1)
-        let scale = CGFloat(1.2 + (0.6 - 1.2) * sqrt(t))
+        let scale = bubbleScale(distance: distance)
 
         // Perspective placement: bubbles converge on the horizon as 1/distance (same elevated viewpoint as the route ribbon), so a bubble floats where the place is instead of in a fixed band.
         let horizon = horizonY(pose: pose, screenSize: screenSize)
@@ -120,6 +104,30 @@ enum ARProjector {
                                scale: scale,
                                distance: distance,
                                edgeAngle: delta)
+    }
+
+    /// Placement for something a scan saw: the bearing and elevation captured at scan time against the current pose.
+    /// No distance, ground plane or camera height involved, so it holds from a rooftop or an observation deck.
+    static func bubblePlacement(for sighting: Sighting,
+                                distance: CLLocationDistance?,
+                                pose: DevicePose,
+                                screenSize: CGSize) -> BubblePlacement {
+        let delta = Angles.shortestDelta(from: pose.headingDegrees, to: sighting.bearing)
+        let x = screenX(forDelta: delta, screenSize: screenSize)
+        let rise = (sighting.elevation - pose.pitchDegrees) / verticalFOV
+        let y = clamp(screenSize.height * (0.5 - CGFloat(rise)),
+                      screenSize.height * 0.12,
+                      screenSize.height * 0.80)
+        return BubblePlacement(point: CGPoint(x: x, y: y),
+                               scale: distance.map(bubbleScale(distance:)) ?? 0.9,
+                               distance: distance,
+                               edgeAngle: delta)
+    }
+
+    /// Depth-true size: 1.2 (<= 25 m) eases down to 0.6 (>= 2500 m) on a sqrt curve, strictly monotonic in distance.
+    static func bubbleScale(distance: CLLocationDistance) -> CGFloat {
+        let t = clamp((distance - 25) / (2500 - 25), 0, 1)
+        return CGFloat(1.2 + (0.6 - 1.2) * sqrt(t))
     }
 
     /// Ground-plane projection for route ribbons from a raised ~9 m viewpoint (eye height flattens blocks into an unreadable slab); `nil` without a fix or when the target is >100° off heading; x clamped to `-0.6…1.6 × width`, y to 2× height.
